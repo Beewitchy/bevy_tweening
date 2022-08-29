@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 #[cfg(feature = "bevy_asset")]
 use bevy::asset::Asset;
 use bevy::{ecs::component::Component, prelude::*};
@@ -35,27 +37,45 @@ use crate::{tweenable::ComponentTarget, Animator, AnimatorState, TweenCompleted}
 /// [`Sprite`]: https://docs.rs/bevy/0.9.0/bevy/sprite/struct.Sprite.html
 /// [`ColorMaterial`]: https://docs.rs/bevy/0.9.0/bevy/sprite/struct.ColorMaterial.html
 #[derive(Debug, Clone, Copy)]
-pub struct TweeningPlugin;
+pub struct TweeningPlugin<EventDataT = u32> {
+    _phantom_data: PhantomData<EventDataT>,
+}
 
-impl Plugin for TweeningPlugin {
+impl<EventDataT: Copy + Clone + Send + Sync + 'static> Default for TweeningPlugin<EventDataT> {
+    fn default() -> Self {
+        Self {
+            _phantom_data: Default::default(),
+        }
+    }
+}
+
+impl<EventDataT: Copy + Clone + Send + Sync + 'static> Plugin for TweeningPlugin<EventDataT> {
     fn build(&self, app: &mut App) {
-        app.add_event::<TweenCompleted>().add_system(
-            component_animator_system::<Transform>.label(AnimationSystem::AnimationUpdate),
+        app.add_event::<TweenCompleted<EventDataT>>().add_system(
+            component_animator_system::<Transform, EventDataT>
+                .label(AnimationSystem::AnimationUpdate),
         );
 
         #[cfg(feature = "bevy_ui")]
-        app.add_system(component_animator_system::<Style>.label(AnimationSystem::AnimationUpdate));
+        app.add_system(
+            component_animator_system::<Style, EventDataT>.label(AnimationSystem::AnimationUpdate),
+        );
 
         #[cfg(feature = "bevy_sprite")]
-        app.add_system(component_animator_system::<Sprite>.label(AnimationSystem::AnimationUpdate));
+        app.add_system(
+            component_animator_system::<Sprite, EventDataT>.label(AnimationSystem::AnimationUpdate),
+        );
 
         #[cfg(all(feature = "bevy_sprite", feature = "bevy_asset"))]
         app.add_system(
-            asset_animator_system::<ColorMaterial>.label(AnimationSystem::AnimationUpdate),
+            asset_animator_system::<ColorMaterial, EventDataT>
+                .label(AnimationSystem::AnimationUpdate),
         );
 
         #[cfg(feature = "bevy_text")]
-        app.add_system(component_animator_system::<Text>.label(AnimationSystem::AnimationUpdate));
+        app.add_system(
+            component_animator_system::<Text, EventDataT>.label(AnimationSystem::AnimationUpdate),
+        );
     }
 }
 
@@ -70,10 +90,10 @@ pub enum AnimationSystem {
 ///
 /// This system extracts all components of type `T` with an `Animator<T>`
 /// attached to the same entity, and tick the animator to animate the component.
-pub fn component_animator_system<T: Component>(
+pub fn component_animator_system<T: Component, EventDataT: Copy + Clone + Send + Sync + 'static>(
     time: Res<Time>,
-    mut query: Query<(Entity, &mut T, &mut Animator<T>)>,
-    events: ResMut<Events<TweenCompleted>>,
+    mut query: Query<(Entity, &mut T, &mut Animator<T, EventDataT>)>,
+    events: ResMut<Events<TweenCompleted<EventDataT>>>,
 ) {
     let mut events: Mut<Events<TweenCompleted>> = events.into();
     for (entity, target, mut animator) in query.iter_mut() {
@@ -97,13 +117,13 @@ pub fn component_animator_system<T: Component>(
 ///
 /// This requires the `bevy_asset` feature (enabled by default).
 #[cfg(feature = "bevy_asset")]
-pub fn asset_animator_system<T: Asset>(
+pub fn asset_animator_system<T: Asset, EventDataT: Copy + Clone + Send + Sync + 'static>(
     time: Res<Time>,
-    assets: ResMut<Assets<T>>,
-    mut query: Query<(Entity, &mut AssetAnimator<T>)>,
-    events: ResMut<Events<TweenCompleted>>,
+    mut assets: ResMut<Assets<T>>,
+    mut query: Query<(Entity, &mut AssetAnimator<T, EventDataT>)>,
+    events: ResMut<Events<TweenCompleted<EventDataT>>>,
 ) {
-    let mut events: Mut<Events<TweenCompleted>> = events.into();
+    let mut events: Mut<Events<TweenCompleted<EventDataT>>> = events.into();
     let mut target = AssetTarget::new(assets);
     for (entity, mut animator) in query.iter_mut() {
         if animator.state != AnimatorState::Paused {

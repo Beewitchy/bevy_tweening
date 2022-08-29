@@ -35,7 +35,6 @@ use crate::{EaseMethod, Lens, RepeatCount, RepeatStrategy, TweeningDirection};
 /// #     fn set_elapsed(&mut self, elapsed: Duration)  { unimplemented!() }
 /// #     fn elapsed(&self) -> Duration  { unimplemented!() }
 /// #     fn tick<'a>(&mut self, delta: Duration, target: &'a mut dyn Targetable<Transform>, entity: Entity, events: &mut Mut<Events<TweenCompleted>>) -> TweenState  { unimplemented!() }
-/// #     fn rewind(&mut self) { unimplemented!() }
 /// # }
 ///
 /// Sequence::new([Box::new(MyTweenable) as BoxedTweenable<_>]);
@@ -44,13 +43,13 @@ use crate::{EaseMethod, Lens, RepeatCount, RepeatStrategy, TweeningDirection};
 ///
 /// Sequence::new([MyTweenable]);
 ///
-/// impl From<MyTweenable> for BoxedTweenable<Transform> {
+/// impl From<MyTweenableventEventDataT> for BoxedTweenable<Transform> {
 ///     fn from(t: MyTweenable) -> Self {
 ///         Box::new(t)
 ///     }
 /// }
 /// ```
-pub type BoxedTweenable<T> = Box<dyn Tweenable<T> + 'static>;
+pub type BoxedTweenable<T, EventDataT> = Box<dyn Tweenable<T, EventDataT> + 'static>;
 
 /// Playback state of a [`Tweenable`].
 ///
@@ -85,7 +84,7 @@ pub enum TweenState {
 /// the [`TweenCompleted`] event instead marks the end of a single loop
 /// iteration.
 #[derive(Copy, Clone)]
-pub struct TweenCompleted {
+pub struct TweenCompleted<EventDataT: Copy + Clone + Send + Sync + 'static> {
     /// The [`Entity`] the tween which completed and its animator are attached
     /// to.
     pub entity: Entity,
@@ -96,7 +95,7 @@ pub struct TweenCompleted {
     ///
     /// [`with_completed_event()`]: Tween::with_completed_event
     /// [`set_completed_event()`]: Tween::set_completed_event
-    pub user_data: u64,
+    pub user_data: EventDataT,
 }
 
 /// Calculate the progress fraction in \[0:1\] of the ratio between two
@@ -251,7 +250,7 @@ impl<'a, T: Asset> Targetable<T> for AssetTarget<'a, T> {
 }
 
 /// An animatable entity, either a single [`Tween`] or a collection of them.
-pub trait Tweenable<T>: Send + Sync {
+pub trait Tweenable<T, EventDataT: Copy + Clone + Send + Sync + 'static>: Send + Sync {
     /// Get the duration of a single iteration of the animation.
     ///
     /// Note that for [`RepeatStrategy::MirroredRepeat`], this is the duration
@@ -314,7 +313,7 @@ pub trait Tweenable<T>: Send + Sync {
         delta: Duration,
         target: &'a mut dyn Targetable<T>,
         entity: Entity,
-        events: &mut Mut<Events<TweenCompleted>>,
+        events: &mut Mut<Events<TweenCompleted<EventDataT>>>,
     ) -> TweenState;
 
     /// Rewind the animation to its starting state.
@@ -369,7 +368,9 @@ pub trait Tweenable<T>: Send + Sync {
 
 macro_rules! impl_boxed {
     ($tweenable:ty) => {
-        impl<T: 'static> From<$tweenable> for BoxedTweenable<T> {
+        impl<T: 'static, EventDataT: Copy + Clone + Send + Sync + 'static> From<$tweenable>
+            for BoxedTweenable<T, EventDataT>
+        {
             fn from(t: $tweenable) -> Self {
                 Box::new(t)
             }
@@ -377,27 +378,28 @@ macro_rules! impl_boxed {
     };
 }
 
-impl_boxed!(Tween<T>);
-impl_boxed!(Sequence<T>);
-impl_boxed!(Tracks<T>);
+impl_boxed!(Tween<T, EventDataT>);
+impl_boxed!(Sequence<T, EventDataT>);
+impl_boxed!(Tracks<T, EventDataT>);
 impl_boxed!(Delay<T>);
 
 /// Type of a callback invoked when a [`Tween`] or [`Delay`] has completed.
 ///
 /// See [`Tween::set_completed()`] or [`Delay::set_completed()`] for usage.
-pub type CompletedCallback<T> = dyn Fn(Entity, &T) + Send + Sync + 'static;
+pub type CompletedCallback<T, EventDataT> =
+    dyn Fn(Entity, &Tween<T, EventDataT>) + Send + Sync + 'static;
 
 /// Single tweening animation instance.
-pub struct Tween<T> {
+pub struct Tween<T, EventDataT: Copy + Clone + Send + Sync + 'static = u32> {
     ease_function: EaseMethod,
     clock: AnimClock,
     direction: TweeningDirection,
     lens: Box<dyn Lens<T> + Send + Sync + 'static>,
-    on_completed: Option<Box<CompletedCallback<Tween<T>>>>,
-    event_data: Option<u64>,
+    on_completed: Option<Box<CompletedCallback<Tween<T>, EventDataT>>>,
+    event_data: Option<EventDataT>,
 }
 
-impl<T: 'static> Tween<T> {
+impl<T: 'static, EventDataT: Copy + Clone + Send + Sync + 'static> Tween<T, EventDataT> {
     /// Chain another [`Tweenable`] after this tween, making a [`Sequence`] with
     /// the two.
     ///
@@ -425,12 +427,12 @@ impl<T: 'static> Tween<T> {
     /// let seq = tween1.then(tween2);
     /// ```
     #[must_use]
-    pub fn then(self, tween: impl Tweenable<T> + 'static) -> Sequence<T> {
+    pub fn then(self, tween: impl Tweenable<T, EventDataT> + 'static) -> Sequence<T, EventDataT> {
         Sequence::with_capacity(2).then(self).then(tween)
     }
 }
 
-impl<T> Tween<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Tween<T, EventDataT> {
     /// Create a new tween animation.
     ///
     /// # Example
@@ -485,7 +487,7 @@ impl<T> Tween<T> {
     /// )
     /// .with_completed_event(42);
     ///
-    /// fn my_system(mut reader: EventReader<TweenCompleted>) {
+    /// fn my_system(mut reader: EventReader<TweenCompleted<EventDataT>>) {
     ///   for ev in reader.iter() {
     ///     assert_eq!(ev.user_data, 42);
     ///     println!("Entity {:?} raised TweenCompleted!", ev.entity);
@@ -495,7 +497,7 @@ impl<T> Tween<T> {
     ///
     /// [`with_completed()`]: Tween::with_completed
     #[must_use]
-    pub fn with_completed_event(mut self, user_data: u64) -> Self {
+    pub fn with_completed_event(mut self, user_data: EventDataT) -> Self {
         self.event_data = Some(user_data);
         self
     }
@@ -619,7 +621,7 @@ impl<T> Tween<T> {
     ///
     /// [`set_completed()`]: Tween::set_completed
     /// [`with_completed_event()`]: Tween::with_completed_event
-    pub fn set_completed_event(&mut self, user_data: u64) {
+    pub fn set_completed_event(&mut self, user_data: EventDataT) {
         self.event_data = Some(user_data);
     }
 
@@ -633,7 +635,9 @@ impl<T> Tween<T> {
     }
 }
 
-impl<T> Tweenable<T> for Tween<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Tweenable<T, EventDataT>
+    for Tween<T, EventDataT>
+{
     fn duration(&self) -> Duration {
         self.clock.duration
     }
@@ -655,7 +659,7 @@ impl<T> Tweenable<T> for Tween<T> {
         delta: Duration,
         target: &'a mut dyn Targetable<T>,
         entity: Entity,
-        events: &mut Mut<Events<TweenCompleted>>,
+        events: &mut Mut<Events<TweenCompleted<EventDataT>>>,
     ) -> TweenState {
         if self.clock.state() == TweenState::Completed {
             return TweenState::Completed;
@@ -719,19 +723,19 @@ impl<T> Tweenable<T> for Tween<T> {
 }
 
 /// A sequence of tweens played back in order one after the other.
-pub struct Sequence<T> {
-    tweens: Vec<BoxedTweenable<T>>,
+pub struct Sequence<T, EventDataT> {
+    tweens: Vec<BoxedTweenable<T, EventDataT>>,
     index: usize,
     duration: Duration,
     elapsed: Duration,
 }
 
-impl<T> Sequence<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Sequence<T, EventDataT> {
     /// Create a new sequence of tweens.
     ///
     /// This method panics if the input collection is empty.
     #[must_use]
-    pub fn new(items: impl IntoIterator<Item = impl Into<BoxedTweenable<T>>>) -> Self {
+    pub fn new(items: impl IntoIterator<Item = impl Into<BoxedTweenable<T, EventDataT>>>) -> Self {
         let tweens: Vec<_> = items.into_iter().map(Into::into).collect();
         assert!(!tweens.is_empty());
         let duration = tweens
@@ -749,9 +753,9 @@ impl<T> Sequence<T> {
 
     /// Create a new sequence containing a single tween.
     #[must_use]
-    pub fn from_single(tween: impl Tweenable<T> + 'static) -> Self {
+    pub fn from_single(tween: impl Tweenable<T, EventDataT> + 'static) -> Self {
         let duration = tween.duration();
-        let boxed: BoxedTweenable<T> = Box::new(tween);
+        let boxed: BoxedTweenable<T, EventDataT> = Box::new(tween);
         Self {
             tweens: vec![boxed],
             index: 0,
@@ -773,7 +777,7 @@ impl<T> Sequence<T> {
 
     /// Append a [`Tweenable`] to this sequence.
     #[must_use]
-    pub fn then(mut self, tween: impl Tweenable<T> + 'static) -> Self {
+    pub fn then(mut self, tween: impl Tweenable<T, EventDataT> + 'static) -> Self {
         self.duration += tween.duration();
         self.tweens.push(Box::new(tween));
         self
@@ -787,12 +791,14 @@ impl<T> Sequence<T> {
 
     /// Get the current active tween in the sequence.
     #[must_use]
-    pub fn current(&self) -> &dyn Tweenable<T> {
+    pub fn current(&self) -> &dyn Tweenable<T, EventDataT> {
         self.tweens[self.index()].as_ref()
     }
 }
 
-impl<T> Tweenable<T> for Sequence<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Tweenable<T, EventDataT>
+    for Sequence<T, EventDataT>
+{
     fn duration(&self) -> Duration {
         self.duration
     }
@@ -834,7 +840,7 @@ impl<T> Tweenable<T> for Sequence<T> {
         mut delta: Duration,
         target: &'a mut dyn Targetable<T>,
         entity: Entity,
-        events: &mut Mut<Events<TweenCompleted>>,
+        events: &mut Mut<Events<TweenCompleted<EventDataT>>>,
     ) -> TweenState {
         self.elapsed = self.elapsed.saturating_add(delta).min(self.duration);
         while self.index < self.tweens.len() {
@@ -863,17 +869,17 @@ impl<T> Tweenable<T> for Sequence<T> {
 }
 
 /// A collection of [`Tweenable`] executing in parallel.
-pub struct Tracks<T> {
-    tracks: Vec<BoxedTweenable<T>>,
+pub struct Tracks<T, EventDataT> {
+    tracks: Vec<BoxedTweenable<T, EventDataT>>,
     duration: Duration,
     elapsed: Duration,
 }
 
-impl<T> Tracks<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Tracks<T, EventDataT> {
     /// Create a new [`Tracks`] from an iterator over a collection of
     /// [`Tweenable`].
     #[must_use]
-    pub fn new(items: impl IntoIterator<Item = impl Into<BoxedTweenable<T>>>) -> Self {
+    pub fn new(items: impl IntoIterator<Item = impl Into<BoxedTweenable<T, EventDataT>>>) -> Self {
         let tracks: Vec<_> = items.into_iter().map(Into::into).collect();
         let duration = tracks
             .iter()
@@ -889,7 +895,9 @@ impl<T> Tracks<T> {
     }
 }
 
-impl<T> Tweenable<T> for Tracks<T> {
+impl<T, EventDataT: Copy + Clone + Send + Sync + 'static> Tweenable<T, EventDataT>
+    for Tracks<T, EventDataT>
+{
     fn duration(&self) -> Duration {
         self.duration
     }
@@ -915,7 +923,7 @@ impl<T> Tweenable<T> for Tracks<T> {
         delta: Duration,
         target: &'a mut dyn Targetable<T>,
         entity: Entity,
-        events: &mut Mut<Events<TweenCompleted>>,
+        events: &mut Mut<Events<TweenCompleted<EventDataT>>>,
     ) -> TweenState {
         self.elapsed = self.elapsed.saturating_add(delta).min(self.duration);
         let mut any_active = false;
@@ -1131,7 +1139,7 @@ impl<T> Tweenable<T> for Delay<T> {
         delta: Duration,
         _target: &'a mut dyn Targetable<T>,
         entity: Entity,
-        events: &mut Mut<Events<TweenCompleted>>,
+        events: &mut Mut<Events<TweenCompleted<EventDataT>>>,
     ) -> TweenState {
         let was_completed = self.is_completed();
 
@@ -1446,7 +1454,7 @@ mod tests {
 
                     // Propagate events
                     {
-                        let mut events = world.resource_mut::<Events<TweenCompleted>>();
+                        let mut events = world.resource_mut::<Events<TweenCompleted<EventDataT>>>();
                         events.update();
                     }
 

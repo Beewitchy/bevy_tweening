@@ -389,19 +389,24 @@ macro_rules! animator_impl {
         }
 
         /// Set the top-level tweenable item this animator controls.
-        pub fn set_tweenable(&mut self, tween: impl Tweenable<T> + 'static) {
+        pub fn set_tweenable(
+            &mut self,
+            tween: impl Tweenable<T, EventDataT> + 'static,
+        ) {
             self.tweenable = Box::new(tween);
         }
 
         /// Get the top-level tweenable this animator is currently controlling.
         #[must_use]
-        pub fn tweenable(&self) -> &dyn Tweenable<T> {
+        pub fn tweenable(&self) -> &(dyn Tweenable<T, EventDataT> + 'static) {
             self.tweenable.as_ref()
         }
 
         /// Get the top-level mutable tweenable this animator is currently controlling.
         #[must_use]
-        pub fn tweenable_mut(&mut self) -> &mut dyn Tweenable<T> {
+        pub fn tweenable_mut(
+            &mut self,
+        ) -> &mut (dyn Tweenable<T, EventDataT> + 'static) {
             self.tweenable.as_mut()
         }
 
@@ -418,14 +423,14 @@ macro_rules! animator_impl {
 
 /// Component to control the animation of another component.
 #[derive(Component)]
-pub struct Animator<T: Component> {
+pub struct Animator<T: Component, EventDataT = u32> {
     /// Control if this animation is played or not.
     pub state: AnimatorState,
-    tweenable: BoxedTweenable<T>,
+    tweenable: BoxedTweenable<T, EventDataT>,
     speed: f32,
 }
 
-impl<T: Component + std::fmt::Debug> std::fmt::Debug for Animator<T> {
+impl<T: Component + std::fmt::Debug, EventDataT> std::fmt::Debug for Animator<T, EventDataT> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Animator")
             .field("state", &self.state)
@@ -433,10 +438,10 @@ impl<T: Component + std::fmt::Debug> std::fmt::Debug for Animator<T> {
     }
 }
 
-impl<T: Component> Animator<T> {
+impl<T: Component, EventDataT: Copy + Clone + Send + Sync + 'static> Animator<T, EventDataT> {
     /// Create a new animator component from a single tweenable.
     #[must_use]
-    pub fn new(tween: impl Tweenable<T> + 'static) -> Self {
+    pub fn new(tween: impl Tweenable<T, EventDataT> + 'static) -> Self {
         Self {
             state: default(),
             tweenable: Box::new(tween),
@@ -450,16 +455,16 @@ impl<T: Component> Animator<T> {
 /// Component to control the animation of an asset.
 #[cfg(feature = "bevy_asset")]
 #[derive(Component)]
-pub struct AssetAnimator<T: Asset> {
+pub struct AssetAnimator<T: Asset, EventDataT> {
     /// Control if this animation is played or not.
     pub state: AnimatorState,
-    tweenable: BoxedTweenable<T>,
+    tweenable: BoxedTweenable<T, EventDataT>,
     handle: Handle<T>,
     speed: f32,
 }
 
 #[cfg(feature = "bevy_asset")]
-impl<T: Asset + std::fmt::Debug> std::fmt::Debug for AssetAnimator<T> {
+impl<T: Asset + std::fmt::Debug, EventDataT> std::fmt::Debug for AssetAnimator<T, EventDataT> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssetAnimator")
             .field("state", &self.state)
@@ -468,10 +473,13 @@ impl<T: Asset + std::fmt::Debug> std::fmt::Debug for AssetAnimator<T> {
 }
 
 #[cfg(feature = "bevy_asset")]
-impl<T: Asset> AssetAnimator<T> {
+impl<T: Asset, EventDataT: Copy + Clone + Send + Sync + 'static> AssetAnimator<T, EventDataT> {
     /// Create a new asset animator component from a single tweenable.
     #[must_use]
-    pub fn new(handle: Handle<T>, tween: impl Tweenable<T> + 'static) -> Self {
+    pub fn new(
+        handle: Handle<T>,
+        tween: impl Tweenable<T, EventDataT> + 'static,
+    ) -> Self {
         Self {
             state: default(),
             tweenable: Box::new(tween),
